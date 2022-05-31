@@ -88,7 +88,7 @@ This diagram shows an example timeline of a task shutting down:
     - It updates its Consul checks to critical status and exits. This ensures this service instance is marked unhealthy.
     - If ACLs are enabled, it runs `consul logout` for the two tokens created by the `consul-client` and `mesh-init` containers.
       This removes those tokens from Consul. If `consul logout` fails for some reason, the ACL controller will remove the tokens
-      after the task has finished stopped.
+      after the task has stopped.
   - `sidecar-proxy` notices the `user-app` container has stopped and exits.
 - **T2**: `consul-client` finishes gracefully leaving the Consul datacenter and exits.
 - **T3**:
@@ -104,7 +104,7 @@ Two types of ACL tokens are required by ECS tasks:
 * **Service tokens:** used by sidecar containers for service registration and health syncing
 
 With Consul on ECS, these tokens are obtained dynamically when a task starts up by logging
-in to Consul's AWS IAM auth method.
+in via Consul's AWS IAM auth method.
 
 ### Consul Client Token
 
@@ -127,7 +127,7 @@ role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles
 to the AWS IAM auth method on the Consul servers. The role is validated with AWS. If the role is
 valid, and if the auth method trusts the IAM role, then the role is permitted to login. A new Consul
 ACL token is created and [Binding Rules](/docs/security/acl/auth-methods#binding-rules) associate
-permissions with the newly crated token. These permissions are mapped to the token based on the IAM
+permissions with the newly created token. These permissions are mapped to the token based on the IAM
 role details. For example, tags on the IAM role are used to specify the service name and the
 namespace to be associated with a service token.
 
@@ -146,7 +146,7 @@ The ACL controller performs the following operations on the Consul servers:
 
 Specifically, the controller does the following when it starts up:
 
-* Creates the Consul role and policy used for client tokens if these do not exist
+* Creates the Consul (not IAM) role and policy used for client tokens if these do not exist
 * Creates instances of the Consul AWS IAM auth method if they do not exist. One instance of the auth
   method is created for Consul client tokens, and a second instance of the auth method is configured
   for service tokens.
