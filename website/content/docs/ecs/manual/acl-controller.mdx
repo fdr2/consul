@@ -20,12 +20,13 @@ its own instance of the ACL controller.
 
 ## Set Up Secrets
 
-Before deploying the ACL controller for the first time, you must [create the following secrets](https://docs.aws.amazon.com/secretsmanager/latest/userguide/manage_create-basic-secret.html) from Consul in AWS Secrets Manager.
+Before deploying the ACL controller for the first time, you must [store the following secrets](https://docs.aws.amazon.com/secretsmanager/latest/userguide/manage_create-basic-secret.html) from Consul in AWS Secrets Manager.
 
 | Secret                | Sample Secret Name           | Description                                                                                                                                                           |
 | --------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Consul server CA cert | `my-consul-ca-cert`          | The Consul server CA Cert for the HTTPS interface. This is required if the Consul server uses a self-signed or internal CA. It is not required for Consul servers in HCP. |
-| Bootstrap ACL Token   | `my-consul-bootstrap-token`  | An ACL token with `acl:write` and `operator:write` permissions.                                                                                                       |
+| Bootstrap ACL Token   | `my-consul-bootstrap-token`  | A Consul ACL token with `acl:write` and `operator:write` permissions.                                                                                                       |
+
 ## Task Definition
 
 You must create a task definition to deploy the ACL controller in your ECS cluster.

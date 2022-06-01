@@ -24,7 +24,7 @@ The following diagram shows the main components of the Consul architecture when 
 1. **Health Syncing:** Optionally, an additional `health-sync` container can be included in a task to sync health statuses
    from ECS into Consul.
 1. **ACL Controller:** The ACL controller is responsible for automating configuration and cleanup in the Consul servers.
-   The ACL controller will automatically configure the [AWS IAM Auth Method](/security/acl/auth-methods/aws-iam), and cleanup
+   The ACL controller will automatically configure the [AWS IAM Auth Method](/docs/security/acl/auth-methods/aws-iam), and cleanup
    unused ACL tokens from Consul. When using Consul Enterprise namespaces, the ACL controller will automatically create Consul
    namespaces for ECS tasks.
 
@@ -116,11 +116,12 @@ names on ECS are not known until runtime.
 Service tokens are associated with a [service identity](/docs/security/acl#service-identities).
 The service identity includes `service:write` permissions for the service and sidecar proxy.
 
-### AWS IAM Auth Method
+## AWS IAM Auth Method
 
-When a service mesh task on ECS starts up, it runs two `consul login` commands to obtain a client
-token and a service token. When the task stops, it attempts two `consul logout` commands in order
-to destroy these tokens.
+Consul's [AWS IAM Auth Method](/security/acl/auth-methods/aws-iam) is used by ECS tasks to
+automatically obtain Consul ACL tokens. When a service mesh task on ECS starts up, it runs two
+`consul login` commands to obtain a client token and a service token via the auth method. When the
+task stops, it attempts two `consul logout` commands in order to destroy these tokens.
 
 During a `consul login`, the [task's IAM
 role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) is presented
@@ -129,34 +130,103 @@ valid, and if the auth method trusts the IAM role, then the role is permitted to
 ACL token is created and [Binding Rules](/docs/security/acl/auth-methods#binding-rules) associate
 permissions with the newly created token. These permissions are mapped to the token based on the IAM
 role details. For example, tags on the IAM role are used to specify the service name and the
-namespace to be associated with a service token.
+Consul Enterprise namespace to be associated with a service token that is created by a successful
+login to the auth method.
 
-When using the Consul on ECS Terraform modules, the auth method will be configured automatically
-by the ACL controller.
+### Task IAM Role
+
+The following configuration is required for the task IAM role in order to be compatible with the
+auth method. When using Terraform, the `mesh-task` module creates the task role with this
+configuration by default.
+
+* A scoped `iam:GetRole` permission must be included on the IAM role, enabling the role to fetch
+  details about itself.
+* A `consul.hashicorp.com.service-name` tag on the IAM role must be set to the Consul service name.
+* <EnterpriseAlert inline /> A <code>consul.hashicorp.com.namespace</code> tag must be set on the
+  IAM role to the Consul Enterprise namespace of the Consul service for the task.
+
+Task IAM roles should not typically be shared across task families. Since a task family represents a
+single Consul service, and since the task role must include the Consul service name, one task role
+is required for each task family when using the auth method.
+
+### Security
+
+The auth method relies on the configuration of AWS resources, such as IAM roles, IAM policies, and
+ECS tasks. If these AWS resources are misconfigured or if the account has loose access controls,
+then the security of your service mesh may be at risk.
+
+Any entity in your AWS account with the ability to obtain credentials for an IAM role could potentially
+obtain a Consul ACL token and impersonate a Consul service. The `mesh-task` Terraform module
+mitigates against this concern by creating the task role with an `AssumeRolePolicyDocument` that
+allows only the AWS ECS service to assume the task role. By default, other entities are unable
+to obtain credentials for task roles, and are unable to abuse the AWS IAM auth method to obtain
+Consul ACL tokens.
+
+However, other entities in your AWS account with the ability to create or modify IAM roles can
+potentially circumvent this. For example, if they are able to create an IAM role with the correct
+tags, they can obtain a Consul ACL token for any service. Or, if they can pass a role to an ECS task
+and start an ECS task, they can use the task to obtain a Consul ACL token via the auth method.
+
+The IAM policy actions `iam:CreateRole`, `iam:TagRole`, `iam:PassRole`, and `sts:AssumeRole` can be
+used to restrict these capabilities in your AWS account and improve security when using the AWS IAM
+auth method. See the [AWS
+documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html) to learn how
+to restrict these permissions in your AWS account.
 
 ## ACL Controller
 
 The ACL controller performs the following operations on the Consul servers:
 
-* Manages Consul admin partitions and namespaces.
-* Manages the Consul AWS IAM auth method.
+* Configures the Consul AWS IAM auth method.
 * Monitors tasks in ECS cluster where the controller is running.
-* Cleans up unused tokens created by `consul login`.
-* <EnterpriseAlert inline /> Creates partitions and namespaces.
+* Cleans up unused Consul ACL tokens created by tasks in this cluster.
+* <EnterpriseAlert inline /> Manages Consul admin partitions and namespaces.
 
-Specifically, the controller does the following when it starts up:
+### Auth Method Configuration
 
-* Creates the Consul (not IAM) role and policy used for client tokens if these do not exist
-* Creates instances of the Consul AWS IAM auth method if they do not exist. One instance of the auth
-  method is created for Consul client tokens, and a second instance of the auth method is configured
-  for service tokens.
-* Creates the binding rules for each auth method instance. These associate permissions to ACL tokens
-  when tasks log in to the AWS IAM auth method.
+The ACL controller is responsible for configuring the AWS IAM auth method. The following resources
+are created by the ACL controller when it starts up:
+
+* **Client role**: The controller creates the Consul (not IAM) role and policy used for client
+  tokens if these do not exist. This policy has `node:write` permissions to enable Consul clients to
+  join the Consul cluster.
+* **Auth method for client tokens**: One instance of the AWS IAM auth method is created for client
+  tokens, if it does not exist. A binding rule is configured that attaches the Consul client role to each
+  token created during a successful login to this auth method instance.
+* **Auth method for service tokens**: One instance of the AWS IAM auth method is created for service
+  tokens, if it does not exist:
+  * A binding rule is configured to attach a [service identity](/docs/security/acl#service-identities)
+    to each token created during a successful login to this auth method instance. The service name for
+    this service identity is taken from the tag, `consul.hashicorp.com.service-name`, on the IAM role
+    used to log in.
+  * <EnterpriseAlert inline /> A namespace binding rule is configured to create service tokens in
+    the namespace specified by the tag, <code>consul.hashicorp.com.namespace</code>, on the IAM
+    role used to log in.
+
+The ACL controller configures both instances of the auth method to permit only certain IAM roles to login,
+by setting the [`BoundIAMPrincipalARNs`](/docs/security/acl/auth-methods/aws-iam#boundiamprincipalarns)
+field of the AWS IAM auth method as follows:
+
+* By default, the only IAM roles permitted to log in must have an ARN matching the pattern,
+  `arn:aws:iam::<ACCOUNT>:role/consul-ecs/*`. This allows IAM roles at the role path `/consul-ecs/`
+  to log in, and only those IAM roles in the same AWS account where the ACL controller is running.
+* The role path can be changed by setting the `iam_role_path` input variable for the `mesh-task` and
+  `acl-controller` modules, or by passing the `-iam-role-path` flag to the `consul-ecs
+  acl-controller` command.
+* Each instance of the auth method is shared by ACL controllers in the same Consul datacenter. Each
+  controller updates the auth method, if necessary, to include additional entries in the
+  `BoundIAMPrincipalARNs` list. This enables the use of the auth method with ECS clusters in
+  different AWS accounts, for example. This does not apply when using Consul Enterprise admin
+  partitions because auth method instances are not shared by multiple controllers in that case.
+
+### Task Monitoring
 
 After startup, the ACL controller monitors tasks in the same ECS cluster where the ACL controller is
-running, and cleans up tokens created by `consul login` for tasks that are no longer running.
+running in order to discover newly running tasks and tasks that have stopped.
+
+The ACL controller cleans up tokens created by `consul login` for tasks that are no longer running.
 Normally, each task attempts `consul logout` commands when the task stops to destroy its tokens.
-However, in unstable conditions the `consul logout` command may fail to cleanup a token.
+However, in unstable conditions the `consul logout` command may fail to clean up a token.
 The ACL controller runs continually to ensure those unused tokens are soon removed.
 
 ### Admin Partitions and Namespaces<EnterpriseAlert inline />
@@ -173,6 +243,7 @@ additional actions:
   and namespace. The ACL controller ignores tasks with a partition tag that does not match the
   controller's assigned partition.
 * Creates namespaces when tasks start up. Namespaces are only created if they do not exist.
+* Creates auth method instances for client and service tokens in controller's assigned admin partition.
 
 ## ECS Health Check Syncing
 

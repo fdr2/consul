@@ -18,32 +18,25 @@ A secure Consul cluster should include the following:
 
 ## Auth Method
 
-Consul on ECS uses the [AWS IAM Auth Method](/docs/security/acl/auth-methods/aws-iam) to enable ECS
-tasks to automatically obtain Consul ACL tokens during startup. See the [Architecture](/docs/ecs/architecture)
-page for an overview of task startup, task shutdown, ACL tokens, and the AWS IAM auth method for Consul on ECS.
+Consul on ECS uses the [AWS IAM Auth Method](/docs/security/acl/auth-methods/aws-iam) to enable
+tasks to automatically obtain Consul ACL tokens during startup. Refer to the
+[Architecture](/docs/ecs/architecture#aws-iam-auth-method) page for an overview of the auth method
+with Consul on ECS.
 
-### Auth Method Configuration
+With the Terraform modules for Consul on ECS, the auth method is supported by default when ACLs are enabled. The ACL controller sets up the auth method on the Consul servers. The `mesh-task` module configures the ECS task definition to be compatible with the auth method.
 
-When using the Terraform modules for Consul on ECS, the auth method is automatically configured
-by the ACL controller, and ECS tasks will be configured by the `mesh-task` module to be able
-to log in to the auth method.
+A unique task IAM role is required for each ECS task family. Since the task family represents one Consul
+service, and since the task IAM role must encode the Consul service name, task IAM roles must not be shared
+by different task families.
 
-The `mesh-task` module configures the task IAM role as follows:
+By default, the `mesh-task` module will create and configure the task IAM role for you.
 
-* Adds a scoped `iam:GetRole` permission, enabling the role to fetch details about itself.
-* Tags the IAM role with the service name
-* <EnterpriseAlert inline /> Tags the IAM role with the Consul Enterprise namespace
-
-The `acl-controller` module deploys the ACL controller. At startup, the ACL controller
-configures two instances of the AWS IAM auth method:
-
-* One instance of the AWS IAM auth method is configured for client tokens:
-  * A Consul role is created with `node:write` permissions for client tokens used by Consul clients.
-  * A binding rule is configured that attaches the Consul role to each token created during a successful login to this auth method instance.
-* One instance of the AWS IAM auth method is configured for service tokens:
-  * A binding rule attaches a [service identity](/docs/security/acl#service-identities) to each token created during a successful login to this auth method instance. The service name for this service identity is taken from the tag, `consul.hashicorp.com.service-name`, on the IAM role.
-  * <EnterpriseAlert inline /> A namespace binding rule creates the service token in the namespace specified in the tag, <code>consul.hashicorp.com.namespace</code>, on the IAM role.
-* Both instances of the auth method only permit IAM roles with an ARN matching this pattern, `arn:aws:iam::<ACCOUNT>:role/consul-ecs/*`. This allows IAM roles at the path `/consul-ecs/` to log in. The role path can be changed by setting the `iam_role_path` input variable for the `mesh-task` and `acl-controller` modules.
+-> **NOTE**: When passing an existing IAM role to the `mesh-task` module using the `task_role` input
+variable, you must tag the IAM role with the tags described in [ECS Task Role
+Configuration](/docs/manual/secure-configuration#ecs-task-role-configuration) to be compatible with
+the AWS IAM auth method. While the `mesh-task` module will attach an `iam:GetRole` permission to the
+existing role, it is unable to tag an existing IAM role due to limitations in the Terraform AWS
+provider.
 
 ## Deploy ACL Controller
 
@@ -160,5 +153,9 @@ The following table explains the `mesh-task` input variables relevant to a secur
 | `consul_http_addr`          | string   | The Consul server address. Required when `acls = true` in order to log in to Consul's AWS IAM auth method to obtain ACL tokens.                                                                                                            |
 | `consul_https_ca_cert_arn`  | string   | (optional) The Secrets Manager secret containing the CA cert for HTTPS communication with Consul servers. Required if the server's certificate is self-signed or signed by an internal CA. This is not required for Consul servers in HCP. |
 
-Now you can deploy your services! Follow the rest of the steps in the [Installation instructions](/docs/ecs/terraform/install#task-module)
-to deploy and connect your services.
+Now you can deploy your services!
+
+* Follow the rest of the steps in the [Installation instructions](/docs/ecs/terraform/install#task-module)
+  to deploy and connect your services.
+* Review the [Security](/docs/architecture#security) section of the Architecture documentation for
+  additional considerations when using the AWS IAM auth method.

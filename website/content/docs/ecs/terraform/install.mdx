@@ -30,7 +30,7 @@ This topic describes the following procedure:
 ## Using the Mesh Task Module
 
 To run an application in ECS with Consul service mesh, you must create an ECS task definition, which includes your application container(s)
-and additional sidecar containers, such as the Consul agent container and the Envoy sidecar proxy container.
+and additional sidecar containers, such as the Consul client container and the Envoy sidecar proxy container.
 
 The [`mesh-task` module](https://registry.terraform.io/modules/hashicorp/consul-ecs/aws/latest/submodules/mesh-task) will automatically include the necessary sidecar containers.
 
@@ -80,7 +80,7 @@ The following fields are required. Refer to the [module reference documentation]
 | `container_definitions` | list     | This is the list of [container definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#container_definitions) for the task definition. This is where you include your application containers. |
 | `essential`             | boolean  | Must be `true` to ensure the health of your application container affects the health status of the task.                                                                                                                                       |
 | `port`                  | integer  | The port that your application listens on, if any. If your application does not listen on a port, set `outbound_only = true`.                                                                                                                  |
-| `retry_join`            | list     | The is the [`retry_join`](/docs/agent/options#_retry_join) option for the Consul agent, which specifies the locations of your Consul servers.                                                                                                  |
+| `retry_join`            | list     | The is the [`retry_join`](/docs/agent/options#_retry_join) option for the Consul client, which specifies the locations of your Consul servers.                                                                                                  |
 | `consul_datacenter`     | string   | The name of your Consul datacenter.                                                                                                                                                                                                            |
 
 ### Running Terraform

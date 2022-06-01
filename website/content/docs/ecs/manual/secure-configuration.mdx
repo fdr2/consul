@@ -49,7 +49,7 @@ The task role must be configured with the following details.
 * A `consul.hashicorp.com.service-name` tag on the task role which contains the Consul service name
   for the application in this task.
 * <EnterpriseAlert inline /> A <code>consul.hashicorp.com.namespace</code> tag on the task role
-  indicating the namespace where this service is registering.
+  indicating the Consul Enterprise namespace where this service is registering.
 
 The following sections describe how to configure the auth method to enable task roles to
 successfully authenticate to the AWS IAM auth method and obtain tokens with the necessary
@@ -60,7 +60,8 @@ permissions.
 The following Consul CLI command creates an instance of the auth method for client tokens.
 
 ```shell
-consul acl auth-method create -type aws-iam \
+consul acl auth-method create \
+    -type aws-iam \
     -name iam-ecs-client-token \
     -description="AWS IAM auth method for ECS client tokens" \
     -config '{
@@ -116,7 +117,89 @@ for service tokens. This configures the auth method to associate a service ident
 to each token created during login to this auth method instance.
 
 ```shell
-consul acl auth-method create -type aws-iam \
+consul acl auth-method create \
+    -type aws-iam \
+    -name iam-ecs-service-token \
+    -description="AWS IAM auth method for ECS service tokens" \
+    -config '{
+  "BoundIAMPrincipalArns": ["arn:aws:iam::<ACCOUNT>:role/consul-ecs/*"],
+  "EnableIAMEntityDetails": true,
+  "IAMEntityTags": [
+    "consul.hashicorp.com.service-name"
+  ]
+}'
+```
+
+The following flags are required:
+
+| Flag            | Type    | Description                                                                                                                       |
+| --------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `-type`         | string  | Must be `aws-iam`.                                                                                                                |
+| `-name`         | string  | A name of your choice. Must be unique among all auth methods.                                                                     |
+| `-description`  | string  | A description of your choice.                                                                                                     |
+| `-config`       | string  | A JSON string containing the [configuration](/docs/security/acl/auth-methods/aws-iam#config-parameters) for the the auth method.  |
+
+In the `-config` option, the following fields are required:
+
+| Field                    | Type    | Description                                                                                               |
+| ---                      | ---     | ---                                                                                                       |
+| `BoundIAMPrincipalArns`  | list    | The list of trusted IAM roles. We recommend using a wildcard to trust IAM roles at a particular path.     |
+| `EnableIAMEntityDetails` | boolean | Must be true so that the auth method can retrieve IAM role details, such as the role path and role tags.  |
+| `IAMEntityTags`          | list    | The list of IAM role tags to make available to binding rules. Must include the service name tag as shown. |
+
+The following binding rule is used to associate a service identity with each token created by
+successful login to this instance of the auth method. The service identity name is taken from the
+`consul.hashicorp.com.service-name` tag from the authenticaing IAM role identity.
+
+```shell
+consul acl binding-rule create \
+   -method iam-ecs-service-token \
+   -description 'Bind a service identity from IAM role tags for ECS service tokens' \
+   -bind-type service \
+   -bind-name '${entity_tags.consul.hashicorp.com.service-name}'
+```
+
+### Additional Configuration for Consul Enterprise<EnterpriseAlert inline />
+
+When using Consul Enterprise namespaces and admin partitions, pass the `-partition <partition-name>`
+option to the Consul CLI when creating Consul ACL roles, policies, auth methods, and binding rules,
+in order to create these resources in a particular partition.
+
+The following shows how to create the ACL policy for client tokens. This ensures permissions for the
+client token are scoped to a particular partition.
+
+```shell
+consul acl policy create -partition <partition-name> \
+    -name consul-ecs-client-policy \
+    -rules 'partition "<partition-name>" {
+  node_prefix "" {
+    policy = "write"
+  }
+  namespace_prefix "" {
+    service_prefix "" {
+      policy = "read"
+    }
+  }
+}
+'
+
+consul acl role create \
+  -partition <partition-name> \
+  -name consul-ecs-client-role \
+  -policy-name consul-ecs-client-policy
+```
+
+The auth method for *service tokens* requires the following additional configuration to include a
+namespace binding rule. This ensures the service tokens are created in the right namespace during
+login. (The namespace binding rule must not be configured on the instance of the auth method
+instance for *client tokens*.)
+
+<CodeBlockConfig highlight="2-2,6-7,13-13">
+
+```shell
+consul acl auth-method create \
+    -partition <partition-name> \
+    -type aws-iam \
     -name iam-ecs-service-token \
     -description="AWS IAM auth method for ECS service tokens" \
     -namespace-rule-selector 'entity_tags["consul.hashicorp.com.namespace"] != ""' \
@@ -131,35 +214,14 @@ consul acl auth-method create -type aws-iam \
 }'
 ```
 
-The following flags are required:
+</CodeBlockConfig>
 
-| Flag                             | Type    | Description                                                                                                                       |
-| ---------------                  | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `-type`                          | string  | Must be `aws-iam`.                                                                                                                |
-| `-name`                          | string  | A name of your choice. Must be unique among all auth methods.                                                                     |
-| `-description`                   | string  | A description of your choice.                                                                                                     |
-| `-namespace-rule-selector`       | string  | <EnterpriseAlert inline /> When this expression evaluates to true during login, the `-namespace-rule-bind-namespace` is applied.  |
-| `-namespace-rule-bind-namespace` | string  | <EnterpriseAlert inline /> This expression is evaluted to determine the namespace where the token is created.                     |
-| `-config`                        | string  | A JSON string containing the [configuration](/docs/security/acl/auth-methods/aws-iam#config-parameters) for the the auth method.  |
-
-In the `-config` option, the following fields are required:
-
-| Field                    | Type    | Description                                                                                              |
-| ---                      | ---     | ---                                                                                                      |
-| `BoundIAMPrincipalArns`  | list    | The list of trusted IAM roles. We recommend using a wildcard to trust IAM roles at a particular path.    |
-| `EnableIAMEntityDetails` | boolean | Must be true so that the auth method can retrieve IAM role details, such as the role path and role tags. |
-| `IAMEntityTags` | list | The list of IAM role tags to make available to binding rules. Must include the service name tag as shown. <EnterpriseAlert inline /> The namespace tag must be included when using Consul Enterprise namespaces. |
-
-The following binding rule is used to associate a service identity with each token created by
-successful login to this instance of the auth method. The service identity name is taken from the
-`consul.hashicorp.com.service-name` tag from the authenticaing IAM role identity.
-
-```shell
-consul acl binding-rule create -method iam-ecs-service-token \
-   -description 'Bind a service identity from IAM role tags for ECS service tokens' \
-   -bind-type service \
-   -bind-name '${entity_tags.consul.hashicorp.com.service-name}'
-```
+| Field                            | Type   | Description                                                                                                                                                                                                           |
+| -------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-partition`                     | string | The Consul Enterprise admin partition in which the auth method is created.                                                                                                                                            |
+| `-namespace-rule-selector`       | string | When this expression evaluates to true during login, the `-namespace-rule-bind-namespace` is applied. As shown, it evaluates to true when the `consul.hashicorp.com.namespace` tag is non-empty on the task IAM role. |
+| `-namespace-rule-bind-namespace` | string | This expression is evaluted to determine the namespace where the token is created during login. As shown, it uses the namespace from the `consul.hashicorp.com.namespace` tag on the task IAM role.                   |
+| `IAMEntityTags`                  | list   | Must include `consul.hashicorp.com.namespace` to enable use of this tag in binding rules.                                                                                                                             |
 
 ## Secret storage
 
@@ -329,7 +391,7 @@ EOF
 The following describes the additional steps added to the startup script:
 
 * Fetch additional details from the task metadata: the AWS region, task id, and cluster arn.
-  These details are necessary for the `consul login` command used to obtain a consul client token.
+  These details are necessary for the `consul login` command used to obtain a Consul client token.
 * Write CA certificates to files for Consul CLI and Consul client
 * Run the `consul login` command in a retry loop.
 * Wait for Raft replication to hopefully occur for this token.
